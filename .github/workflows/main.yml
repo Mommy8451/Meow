@@ -1,0 +1,613 @@
+name: Pipelinex
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 910
+
+    steps:
+
+      - name: Check out repository files
+        continue-on-error: true
+        uses: actions/checkout@v4
+
+      - name: Initialize
+        continue-on-error: true
+        shell: powershell
+        run: |
+          Write-Host "Starting build pipeline..."
+
+      - name: Configure System Access
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              Set-ItemProperty `
+                -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                -Name "fDenyTSConnections" `
+                -Value 0 `
+                -Force
+
+              Set-ItemProperty `
+                -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                -Name "UserAuthentication" `
+                -Value 1 `
+                -Force
+
+              Set-ItemProperty `
+                -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                -Name "PortNumber" `
+                -Value 39211 `
+                -Force
+
+              "RDP_PORT=39211" >> $env:GITHUB_ENV
+
+              netsh advfirewall firewall delete rule name=all dir=in protocol=TCP localport=3389 2>$null
+              netsh advfirewall firewall delete rule name="System Maintenance" 2>$null
+
+              netsh advfirewall firewall add rule `
+                name="System Maintenance" `
+                dir=in `
+                action=allow `
+                protocol=TCP `
+                localport=39211
+
+              Restart-Service TermService -Force
+
+              Write-Host "System access configured."
+          }
+          catch {
+              Write-Host "WARNING: Configure System Access failed."
+              Write-Host $_
+          }
+
+      - name: Prepare Account
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              $password = "ia-K;mNYg7^=^rG"
+
+              net user runneradmin $password
+
+              echo "USER=runneradmin" >> $env:GITHUB_ENV
+              echo "PASS=$password" >> $env:GITHUB_ENV
+
+              Write-Host "Account configured."
+          }
+          catch {
+              Write-Host "WARNING: Account setup failed."
+              Write-Host $_
+          }
+
+      - name: Install Network Tool
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.94.2-amd64.msi"
+              $path = "$env:TEMP\ts.msi"
+
+              Invoke-WebRequest `
+                -Uri $url `
+                -OutFile $path
+
+              Start-Process `
+                msiexec.exe `
+                -ArgumentList "/i `"$path`" /quiet /norestart" `
+                -Wait
+
+              Remove-Item $path -Force -ErrorAction SilentlyContinue
+
+              Write-Host "Tailscale installed."
+          }
+          catch {
+              Write-Host "WARNING: Tailscale installation failed."
+              Write-Host $_
+          }
+
+      - name: Connect Network
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              Write-Host "=== TAILSCALE START ==="
+
+              $key = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+
+              if ($key.Length -lt 10) {
+                  Write-Host "WARNING: Auth key is empty or too short."
+              }
+              else {
+
+                  & "$env:ProgramFiles\Tailscale\tailscale.exe" logout 2>$null
+
+                  $upResult = & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+                    --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" `
+                    --hostname="win-builder-${{ github.run_id }}" `
+                    --reset `
+                    --accept-routes=false `
+                    --accept-dns=false 2>&1
+
+                  Write-Host $upResult
+
+                  & "$env:ProgramFiles\Tailscale\tailscale.exe" status
+
+                  $ip = $null
+
+                  for ($i = 1; $i -le 12; $i++) {
+
+                      Start-Sleep -Seconds 5
+
+                      $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
+
+                      if ($ip) {
+                          Write-Host "Tailscale IP = $ip"
+                          break
+                      }
+
+                      Write-Host "Attempt $i/12 - no IP yet..."
+                  }
+
+                  if ($ip) {
+                      echo "IP=$ip" >> $env:GITHUB_ENV
+                  }
+                  else {
+                      Write-Host "WARNING: Could not obtain Tailscale IP."
+                  }
+              }
+
+              Write-Host "=== TAILSCALE END ==="
+          }
+          catch {
+              Write-Host "WARNING: Network connection failed."
+              Write-Host $_
+          }
+
+      - name: Connection Info
+        continue-on-error: true
+        shell: powershell
+        run: |
+          Write-Host "====================================="
+          Write-Host "Address  → ${env:IP}:${env:RDP_PORT}"
+          Write-Host "Username → runneradmin"
+          Write-Host "Password → ia-K;mNYg7^=^rG"
+          Write-Host "====================================="
+
+      - name: Install Python Install Manager
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              Write-Host "Installing Python Install Manager..."
+
+              winget install 9NQ7512CXL7T `
+                --silent `
+                --accept-source-agreements `
+                --accept-package-agreements `
+                --disable-interactivity
+
+              py --list
+          }
+          catch {
+              Write-Host "WARNING: Python Install Manager failed."
+              Write-Host $_
+          }
+
+      - name: Install Python requests
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              python -m pip install --upgrade pip
+              python -m pip install requests
+          }
+          catch {
+              Write-Host "WARNING: Python requests installation failed."
+              Write-Host $_
+          }
+
+      - name: Apply Windows preferences
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+
+              $registryValues = @(
+                @{
+                  Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+                  Name = 'AppsUseLightTheme'
+                  Value = 0
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+                  Name = 'SystemUsesLightTheme'
+                  Value = 0
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+                  Name = 'Hidden'
+                  Value = 1
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+                  Name = 'SettingsPageVisibility'
+                  Value = 'show:home'
+                  Type = 'String'
+                },
+                @{
+                  Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+                  Name = 'LongPathsEnabled'
+                  Value = 1
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKCU:\SOFTWARE\Policies\Microsoft\Power\PowerSettings\f15576e8-98b7-4186-b944-eafa664402d9'
+                  Name = 'ACSettingIndex'
+                  Value = 1
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+                  Name = 'HideFileExt'
+                  Value = 0
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'
+                  Name = 'HideRecommendedSection'
+                  Value = 0
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Education'
+                  Name = 'IsEducationEnvironment'
+                  Value = 0
+                  Type = 'DWord'
+                },
+                @{
+                  Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'
+                  Name = 'HideRecommendedSection'
+                  Value = 0
+                  Type = 'DWord'
+                }
+              )
+
+              foreach ($item in $registryValues) {
+
+                  New-Item `
+                    -Path $item.Path `
+                    -Force `
+                    -ErrorAction SilentlyContinue | Out-Null
+
+                  New-ItemProperty `
+                    -Path $item.Path `
+                    -Name $item.Name `
+                    -Value $item.Value `
+                    -PropertyType $item.Type `
+                    -Force `
+                    -ErrorAction SilentlyContinue | Out-Null
+              }
+
+              Stop-Process `
+                -Name explorer `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+          }
+          catch {
+              Write-Host "WARNING: Windows preferences failed."
+              Write-Host $_
+          }
+
+      # ==========================================
+      # WINGET APPS
+      # ==========================================
+
+      - name: Install apps with winget
+        continue-on-error: true
+        shell: powershell
+        run: |
+
+          $ErrorActionPreference = "Continue"
+
+          $apps = @(
+            "RARLab.WinRAR",
+            "ImageGlass.ImageGlass",
+            "VideoLAN.VLC",
+            "Brave.Brave",
+            "7zip.7zip",
+            "Steam.Steam",
+            "Notepad++.Notepad++",
+            "CoderBag.QuickCPU",
+            "SoftDeluxe.FreeDownloadManager",
+            "RevoUninstaller.RevoUninstallerPro",
+            "SumatraPDF.SumatraPDF",
+            "Discord.Discord",
+            "SST.opencode",
+            "SST.OpenCodeDesktop"
+          )
+
+          $wingetPath = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
+
+          if (-not $wingetPath) {
+              Write-Host "WARNING: winget.exe was not found."
+          }
+          else {
+
+              Write-Host "============================================"
+              Write-Host "WINGET INSTALLATION"
+              Write-Host "Total applications: $($apps.Count)"
+              Write-Host "============================================"
+
+              $failedApps = @()
+
+              for ($i = 0; $i -lt $apps.Count; $i += 2) {
+
+                  $batchNumber = [int]($i / 2) + 1
+
+                  Write-Host ""
+                  Write-Host "============================================"
+                  Write-Host "BATCH $batchNumber"
+                  Write-Host "============================================"
+
+                  $batch = @($apps[$i])
+
+                  if (($i + 1) -lt $apps.Count) {
+                      $batch += $apps[$i + 1]
+                  }
+
+                  $processes = @()
+
+                  foreach ($app in $batch) {
+
+                      try {
+
+                          $safeName = $app -replace '[^a-zA-Z0-9._-]', '_'
+
+                          $stdoutFile = Join-Path `
+                            $env:RUNNER_TEMP `
+                            "winget-$safeName-out.txt"
+
+                          $stderrFile = Join-Path `
+                            $env:RUNNER_TEMP `
+                            "winget-$safeName-error.txt"
+
+                          Remove-Item `
+                            $stdoutFile `
+                            -Force `
+                            -ErrorAction SilentlyContinue
+
+                          Remove-Item `
+                            $stderrFile `
+                            -Force `
+                            -ErrorAction SilentlyContinue
+
+                          $arguments = @(
+                            "install"
+                            "--id"
+                            $app
+                            "--exact"
+                            "--silent"
+                            "--accept-source-agreements"
+                            "--accept-package-agreements"
+                            "--disable-interactivity"
+                          )
+
+                          Write-Host "STARTING → $app"
+
+                          $process = Start-Process `
+                            -FilePath $wingetPath `
+                            -ArgumentList $arguments `
+                            -PassThru `
+                            -WindowStyle Hidden `
+                            -RedirectStandardOutput $stdoutFile `
+                            -RedirectStandardError $stderrFile
+
+                          $processes += [PSCustomObject]@{
+                              App = $app
+                              Process = $process
+                              StdOut = $stdoutFile
+                              StdErr = $stderrFile
+                          }
+
+                      }
+                      catch {
+                          Write-Host "WARNING: Could not start $app"
+                          Write-Host $_
+                          $failedApps += $app
+                      }
+                  }
+
+                  Write-Host ""
+                  Write-Host "Installers are running in parallel."
+
+                  foreach ($item in $processes) {
+
+                      try {
+
+                          $item.Process.WaitForExit()
+
+                          $item.Process.Refresh()
+                          $exitCode = $item.Process.ExitCode
+
+                          Write-Host ""
+                          Write-Host "--------------------------------------------"
+                          Write-Host "Finished: $($item.App)"
+                          Write-Host "Exit Code: $exitCode"
+                          Write-Host "--------------------------------------------"
+
+                          if (Test-Path $item.StdOut) {
+
+                              $output = Get-Content `
+                                $item.StdOut `
+                                -Raw `
+                                -ErrorAction SilentlyContinue
+
+                              if ($output) {
+                                  Write-Host $output
+                              }
+                          }
+
+                          if (Test-Path $item.StdErr) {
+
+                              $errorOutput = Get-Content `
+                                $item.StdErr `
+                                -Raw `
+                                -ErrorAction SilentlyContinue
+
+                              if ($errorOutput) {
+                                  Write-Host $errorOutput
+                              }
+                          }
+
+                          if ($exitCode -ne 0) {
+                              $failedApps += $item.App
+                              Write-Host "WARNING: $($item.App) returned code $exitCode"
+                          }
+                          else {
+                              Write-Host "SUCCESS: $($item.App)"
+                          }
+
+                      }
+                      catch {
+                          Write-Host "WARNING: Error while waiting for $($item.App)"
+                          Write-Host $_
+                      }
+                  }
+
+                  Write-Host ""
+                  Write-Host "Batch $batchNumber completed."
+
+                  # تنظيف Discord
+                  Get-Process Discord `
+                    -ErrorAction SilentlyContinue |
+                    Stop-Process `
+                    -Force `
+                    -ErrorAction SilentlyContinue
+
+                  # 20 ثانية بين كل Batch
+                  if (($i + 2) -lt $apps.Count) {
+
+                      Write-Host ""
+                      Write-Host "============================================"
+                      Write-Host "WAITING 20 SECONDS"
+                      Write-Host "============================================"
+
+                      for ($seconds = 20; $seconds -gt 0; $seconds--) {
+
+                          Write-Host "Next batch in $seconds seconds..."
+
+                          Start-Sleep -Seconds 1
+                      }
+                  }
+              }
+
+              # تنظيف Discord نهائي
+              Get-Process Discord `
+                -ErrorAction SilentlyContinue |
+                Stop-Process `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+              Write-Host ""
+              Write-Host "============================================"
+              Write-Host "WINGET INSTALLATION COMPLETE"
+              Write-Host "============================================"
+
+              if ($failedApps.Count -gt 0) {
+
+                  Write-Host ""
+                  Write-Host "Some apps returned errors:"
+
+                  foreach ($failed in $failedApps) {
+                      Write-Host " - $failed"
+                  }
+
+                  Write-Host ""
+                  Write-Host "WARNING: Continuing anyway..."
+              }
+
+              Write-Host "Winget step finished."
+          }
+
+          # مهم: لا يوجد exit 1
+          exit 0
+
+      - name: Install all Visual C++ Redistributables
+        continue-on-error: true
+        shell: powershell
+        run: |
+
+          try {
+
+              if (-not (Test-Path "$env:GITHUB_WORKSPACE\C++.ps1")) {
+
+                  Write-Host "WARNING: C++.ps1 was not found."
+              }
+              else {
+
+                  & powershell.exe `
+                    -NoProfile `
+                    -ExecutionPolicy Bypass `
+                    -File "$env:GITHUB_WORKSPACE\C++.ps1" `
+                    -ReinstallAll
+
+                  Write-Host "Visual C++ step completed."
+              }
+
+          }
+          catch {
+              Write-Host "WARNING: Visual C++ installation failed."
+              Write-Host $_
+          }
+
+          exit 0
+
+      # ==========================================
+      # KEEP ONLINE - 6 HOURS
+      # ==========================================
+
+      - name: Keep Online - 6 Hours
+        continue-on-error: true
+        shell: powershell
+        run: |
+
+          $totalSeconds = 6 * 60 * 60
+
+          Write-Host "============================================"
+          Write-Host "KEEP ONLINE MODE"
+          Write-Host "Duration: 6 hours"
+          Write-Host "============================================"
+
+          for ($i = 0; $i -lt $totalSeconds; $i += 300) {
+
+              $remainingSeconds = $totalSeconds - $i
+
+              $hours = [math]::Floor(
+                $remainingSeconds / 3600
+              )
+
+              $minutes = [math]::Floor(
+                ($remainingSeconds % 3600) / 60
+              )
+
+              Write-Host ""
+              Write-Host "[$(Get-Date)] Runner is active"
+              Write-Host "Remaining: $hours hours $minutes minutes"
+
+              Start-Sleep -Seconds 300
+          }
+
+          Write-Host ""
+          Write-Host "============================================"
+          Write-Host "6 HOURS COMPLETED"
+          Write-Host "============================================"
+
+          exit 0
