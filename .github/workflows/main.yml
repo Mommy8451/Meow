@@ -1,4 +1,4 @@
-name: Pipelinex
+name: Pipeline
 
 on:
   workflow_dispatch:
@@ -142,7 +142,7 @@ jobs:
 
                       Start-Sleep -Seconds 5
 
-                      $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
+                      $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 | Select-Object -First 1).Trim()
 
                       if ($ip) {
                           Write-Host "Tailscale IP = $ip"
@@ -171,11 +171,40 @@ jobs:
         continue-on-error: true
         shell: powershell
         run: |
+          # Get IP (from env, or query Tailscale directly as fallback)
+          $ip = $env:IP
+
+          if (-not $ip) {
+              try {
+                  $tsExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
+                  if (Test-Path $tsExe) {
+                      $ip = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim()
+                  }
+              }
+              catch {
+                  $ip = $null
+              }
+          }
+
+          if (-not $ip) {
+              $ip = "NO-IP"
+          }
+
+          # Get RDP port
+          $port = $env:RDP_PORT
+          if (-not $port) {
+              $port = "39211"
+          }
+
+          $fullAddress = "${ip}:${port}"
+
           Write-Host "====================================="
-          Write-Host "Address  → ${env:IP}:${env:RDP_PORT}"
-          Write-Host "Username → runneradmin"
-          Write-Host "Password → ia-K;mNYg7^=^rG"
+          Write-Host "Address  -> $fullAddress"
+          Write-Host "Username -> runneradmin"
+          Write-Host "Password -> ia-K;mNYg7^=^rG"
           Write-Host "====================================="
+          Write-Host ""
+          Write-Host "FULL ADDRESS: $fullAddress"
 
       - name: Install Python Install Manager
         continue-on-error: true
