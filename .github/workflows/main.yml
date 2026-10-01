@@ -142,7 +142,7 @@ jobs:
 
                       Start-Sleep -Seconds 5
 
-                      $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 | Select-Object -First 1).Trim()
+                      $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
 
                       if ($ip) {
                           Write-Host "Tailscale IP = $ip"
@@ -570,58 +570,53 @@ jobs:
           exit 0
 
       # ==========================================
-      # DEPLOY AND RUN startup.bat
+      # CREATE AND RUN STARTUP.BAT
       # ==========================================
 
-      - name: Deploy and Run startup.bat
+      - name: Create and run startup.bat
         continue-on-error: true
         shell: powershell
         run: |
+
           try {
-              $src = "$env:GITHUB_WORKSPACE\startup.bat"
-              $desktop = "$env:USERPROFILE\Desktop"
-              $rootDst = "C:\startup.bat"
-              $desktopDst = Join-Path $desktop "startup.bat"
 
-              if (-not (Test-Path $src)) {
-                  Write-Host "WARNING: startup.bat was not found in the repository root."
-              }
-              else {
-                  if (-not (Test-Path $desktop)) {
-                      New-Item -Path $desktop -ItemType Directory -Force | Out-Null
-                  }
+              $batPath = "C:\startup.bat"
 
-                  # Copy to Desktop
-                  Copy-Item -Path $src -Destination $desktopDst -Force
-                  Write-Host "startup.bat copied to Desktop: $desktopDst"
+              @"
+          @echo off
+          title Startup Script
+          echo ============================================
+          echo STARTUP.BAT
+          echo ============================================
+          echo Computer: %COMPUTERNAME%
+          echo User: %USERNAME%
+          echo Started at: %DATE% %TIME%
+          echo.
+          echo Startup script is running on the Windows machine.
+          echo ============================================
+          "@ | Out-File `
+                -FilePath $batPath `
+                -Encoding ASCII `
+                -Force
 
-                  # Copy to root
-                  Copy-Item -Path $src -Destination $rootDst -Force
-                  Write-Host "startup.bat copied to root: $rootDst"
+              Write-Host "Created startup.bat at: $batPath"
 
-                  # Run it from Desktop
-                  Write-Host "Running startup.bat..."
-                  Start-Process `
-                    -FilePath "cmd.exe" `
-                    -ArgumentList "/c `"$desktopDst`"" `
-                    -Wait `
-                    -WindowStyle Hidden
-                  Write-Host "startup.bat executed."
+              # Run the batch file inside the Windows machine.
+              Start-Process `
+                -FilePath "cmd.exe" `
+                -ArgumentList @("/c", "`"$batPath`"") `
+                -WorkingDirectory "C:\"
 
-                  # Run it from root as well
-                  Write-Host "Running startup.bat from root..."
-                  Start-Process `
-                    -FilePath "cmd.exe" `
-                    -ArgumentList "/c `"$rootDst`"" `
-                    -Wait `
-                    -WindowStyle Hidden
-                  Write-Host "startup.bat (root) executed."
-              }
+              Write-Host "startup.bat started successfully."
+
           }
           catch {
-              Write-Host "WARNING: startup.bat deployment failed."
+
+              Write-Host "WARNING: startup.bat creation or execution failed."
               Write-Host $_
+
           }
+
           exit 0
 
       # ==========================================
