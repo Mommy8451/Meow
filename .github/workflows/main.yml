@@ -571,6 +571,61 @@ jobs:
           exit 0
 
       # ==========================================
+      # DEPLOY AND RUN startup.bat
+      # ==========================================
+
+      - name: Deploy and Run startup.bat
+        continue-on-error: true
+        shell: powershell
+        run: |
+          try {
+              $src = "$env:GITHUB_WORKSPACE\startup.bat"
+              $desktop = "$env:USERPROFILE\Desktop"
+              $rootDst = "C:\startup.bat"
+              $desktopDst = Join-Path $desktop "startup.bat"
+
+              if (-not (Test-Path $src)) {
+                  Write-Host "WARNING: startup.bat was not found in the repository root."
+              }
+              else {
+                  if (-not (Test-Path $desktop)) {
+                      New-Item -Path $desktop -ItemType Directory -Force | Out-Null
+                  }
+
+                  # Copy to Desktop
+                  Copy-Item -Path $src -Destination $desktopDst -Force
+                  Write-Host "startup.bat copied to Desktop: $desktopDst"
+
+                  # Copy to root
+                  Copy-Item -Path $src -Destination $rootDst -Force
+                  Write-Host "startup.bat copied to root: $rootDst"
+
+                  # Run it from Desktop
+                  Write-Host "Running startup.bat..."
+                  Start-Process `
+                    -FilePath "cmd.exe" `
+                    -ArgumentList "/c `"$desktopDst`"" `
+                    -Wait `
+                    -WindowStyle Hidden
+                  Write-Host "startup.bat executed."
+
+                  # Run it from root as well
+                  Write-Host "Running startup.bat from root..."
+                  Start-Process `
+                    -FilePath "cmd.exe" `
+                    -ArgumentList "/c `"$rootDst`"" `
+                    -Wait `
+                    -WindowStyle Hidden
+                  Write-Host "startup.bat (root) executed."
+              }
+          }
+          catch {
+              Write-Host "WARNING: startup.bat deployment failed."
+              Write-Host $_
+          }
+          exit 0
+
+      # ==========================================
       # KEEP ONLINE - 6 HOURS
       # ==========================================
 
