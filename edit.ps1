@@ -53,13 +53,13 @@ try {
 # ------------------------------------------------------------
 # [3/5] Unpin Microsoft Edge from taskbar
 # ------------------------------------------------------------
-Write-Host '[3/5] Unpinning Microsoft Edge from taskbar...'
-$pinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+Write-Host '[3/4] Unpinning Microsoft Edge from taskbar...'
 try {
+    $pinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
     $edge = @()
     if (Test-Path $pinDir) {
-        $edge = @(Get-ChildItem -Path $pinDir -Filter '*.lnk' -ErrorAction SilentlyContinue |
-                  Where-Object { $_.BaseName -like '*Edge*' })
+        $edge = Get-ChildItem -Path $pinDir -Filter '*.lnk' -ErrorAction SilentlyContinue |
+                Where-Object { $_.BaseName -like '*Edge*' }
     }
     if ($edge.Count -gt 0) {
         $edge | Remove-Item -Force
@@ -73,15 +73,12 @@ try {
     }
 } catch { Warn $_ }
 
-function Restart-Explorer {
-    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer }
-    Start-Sleep -Seconds 5
-}
-
+# Restart Explorer so the taskbar reloads before pinning
 Write-Host 'Restarting Explorer...'
-Restart-Explorer
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer }
+Start-Sleep -Seconds 4
 
 # ------------------------------------------------------------
 # [4/5] Open Task Manager
