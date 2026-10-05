@@ -508,7 +508,6 @@ jobs:
                   }
               }
 
-              # تنظيف Discord نهائي
               Get-Process Discord `
                 -ErrorAction SilentlyContinue |
                 Stop-Process `
@@ -569,6 +568,36 @@ jobs:
 
           exit 0
 
+      - name: Run edit.ps1
+        continue-on-error: true
+        shell: powershell
+        run: |
+
+          try {
+
+              $script = "$env:GITHUB_WORKSPACE\edit.ps1"
+
+              if (-not (Test-Path $script)) {
+
+                  Write-Host "WARNING: edit.ps1 was not found."
+              }
+              else {
+
+                  "4", "" | & powershell.exe `
+                    -NoProfile `
+                    -ExecutionPolicy Bypass `
+                    -File $script
+
+                  Write-Host "edit.ps1 step completed."
+              }
+
+          }
+          catch {
+              Write-Host "WARNING: edit.ps1 failed."
+              Write-Host $_
+          }
+
+          exit 0
       # ==========================================
       # CREATE AND RUN STARTUP.BAT
       # ==========================================
