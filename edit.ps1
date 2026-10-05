@@ -9,9 +9,9 @@ Write-Host '============================================'
 Write-Host ''
 
 # ------------------------------------------------------------
-# [1/4] Wallpaper
+# [1/5] Wallpaper
 # ------------------------------------------------------------
-Write-Host '[1/4] Downloading and setting wallpaper...'
+Write-Host '[1/5] Downloading and setting wallpaper...'
 try {
     $url = 'https://4kwallpapers.com/images/walls/thumbs_3t/26545.png'
     $img = Join-Path $env:USERPROFILE 'wallpaper.png'
@@ -37,10 +37,10 @@ public class WP {
 } catch { Warn $_ }
 
 # ------------------------------------------------------------
-# [2/4] Enable "End Task" in taskbar right-click menu
-# (Windows 11 23H2+ only - the setting does not exist on Win10)
+# [2/5] Enable "End Task" in taskbar right-click menu
+# (Windows 11 23H2+ only)
 # ------------------------------------------------------------
-Write-Host '[2/4] Enabling End Task in Developer Settings...'
+Write-Host '[2/5] Enabling End Task in Developer Settings...'
 try {
     $p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings'
     if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null }
@@ -51,17 +51,15 @@ try {
 } catch { Warn $_ }
 
 # ------------------------------------------------------------
-# [3/4] Unpin Microsoft Edge from taskbar
-# Verb-based unpin is blocked on modern Windows, so remove the pinned
-# shortcut + reset the Taskband cache, then restart Explorer.
+# [3/5] Unpin Microsoft Edge from taskbar
 # ------------------------------------------------------------
-Write-Host '[3/4] Unpinning Microsoft Edge from taskbar...'
+Write-Host '[3/5] Unpinning Microsoft Edge from taskbar...'
+$pinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
 try {
-    $pinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
     $edge = @()
     if (Test-Path $pinDir) {
-        $edge = Get-ChildItem -Path $pinDir -Filter '*.lnk' -ErrorAction SilentlyContinue |
-                Where-Object { $_.BaseName -like '*Edge*' }
+        $edge = @(Get-ChildItem -Path $pinDir -Filter '*.lnk' -ErrorAction SilentlyContinue |
+                  Where-Object { $_.BaseName -like '*Edge*' })
     }
     if ($edge.Count -gt 0) {
         $edge | Remove-Item -Force
@@ -75,78 +73,146 @@ try {
     }
 } catch { Warn $_ }
 
-# Restart Explorer so the taskbar reloads before pinning
+function Restart-Explorer {
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer }
+    Start-Sleep -Seconds 5
+}
+
 Write-Host 'Restarting Explorer...'
-Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer }
-Start-Sleep -Seconds 4
+Restart-Explorer
 
 # ------------------------------------------------------------
-# [4/4] Pin Task Manager to taskbar
-# 'taskbarpin' verb is blocked, so register a temporary custom verb that
-# reuses the system's own pin handler, invoke it, then clean up.
+# [4/5] Open Task Manager
 # ------------------------------------------------------------
-Write-Host '[4/4] Pinning Task Manager to taskbar...'
-$verbKey = 'Software\Classes\*\shell\PinToTaskbarTmp'
-$lnk     = Join-Path $env:TEMP 'Task Manager.lnk'
+Write-Host '[4/5] Opening Task Manager...'
 try {
-    $handler = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\Windows.taskbarpin').ExplorerCommandHandler
+    Start-Process -FilePath (Join-Path $env:WINDIR 'System32\Taskmgr.exe')
+    Start-Sleep -Seconds 3
+    Write-Host '   Task Manager opened.'
+} catch { Warn $_ }
+
+# ------------------------------------------------------------
+# [5/5] Pin Task Manager to taskbar
+# Method A: custom verb (reuses system pin handler) on Taskmgr.exe
+# Method B: same verb on a .lnk in %TEMP%
+# Method C: drop the .lnk directly in User Pinned\TaskBar + restart Explorer
+# Each method is verified before moving to the next.
+# ------------------------------------------------------------
+Write-Host '[5/5] Pinning Task Manager to taskbar...'
+
+$taskmgr = Join-Path $env:WINDIR 'System32\Taskmgr.exe'
+$tmpLnk  = Join-Path $env:TEMP 'Task Manager.lnk'
+$verb    = '{:}'
+$verbKey = "Software\Classes\*\shell\$verb"
+
+function Test-TaskMgrPinned {
+    if (-not (Test-Path $pinDir)) { return $false }
+    $ws = New-Object -ComObject WScript.Shell
+    foreach ($f in Get-ChildItem -Path $pinDir -Filter '*.lnk' -ErrorAction SilentlyContinue) {
+        try {
+            if ($ws.CreateShortcut($f.FullName).TargetPath -like '*\Taskmgr.exe') { return $true }
+        } catch {}
+    }
+    return $false
+}
+
+function Invoke-PinVerb([string]$path) {
+    $shell  = New-Object -ComObject Shell.Application
+    $folder = $shell.Namespace((Split-Path $path))
+    $item   = $folder.ParseName((Split-Path $path -Leaf))
+    if (-not $item) { throw "ParseName failed for $path" }
+    $item.InvokeVerb($verb)
+    Start-Sleep -Seconds 3
+}
+
+try {
+    $handler = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\Windows.taskbarpin' -ErrorAction Stop).ExplorerCommandHandler
     if (-not $handler) { throw 'Windows.taskbarpin handler not found.' }
 
     $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($verbKey)
     $k.SetValue('ExplorerCommandHandler', $handler)
     $k.Close()
 
-    $ws = New-Object -ComObject WScript.Shell
-    $sc = $ws.CreateShortcut($lnk)
-    $sc.TargetPath = Join-Path $env:WINDIR 'System32\Taskmgr.exe'
-    $sc.Save()
+    $pinned = Test-TaskMgrPinned
 
-    $shell  = New-Object -ComObject Shell.Application
-    $folder = $shell.Namespace((Split-Path $lnk))
-    $item   = $folder.ParseName((Split-Path $lnk -Leaf))
-    $item.InvokeVerb('PinToTaskbarTmp')
-    Start-Sleep -Seconds 3
-    Write-Host '   Task Manager pinned.'
+    # Method A
+    if (-not $pinned) {
+        try { Invoke-PinVerb $taskmgr } catch { Warn $_ }
+        $pinned = Test-TaskMgrPinned
+        if ($pinned) { Write-Host '   Pinned (method A).' }
+    }
+
+    # Method B
+    if (-not $pinned) {
+        try {
+            $ws = New-Object -ComObject WScript.Shell
+            $sc = $ws.CreateShortcut($tmpLnk)
+            $sc.TargetPath = $taskmgr
+            $sc.Save()
+            Invoke-PinVerb $tmpLnk
+        } catch { Warn $_ }
+        $pinned = Test-TaskMgrPinned
+        if ($pinned) { Write-Host '   Pinned (method B).' }
+    }
+
+    # Method C
+    if (-not $pinned) {
+        try {
+            if (-not (Test-Path $pinDir)) { New-Item -ItemType Directory -Path $pinDir -Force | Out-Null }
+            $ws = New-Object -ComObject WScript.Shell
+            $sc = $ws.CreateShortcut((Join-Path $pinDir 'Task Manager.lnk'))
+            $sc.TargetPath = $taskmgr
+            $sc.Save()
+            Restart-Explorer
+        } catch { Warn $_ }
+        $pinned = Test-TaskMgrPinned
+        if ($pinned) { Write-Host '   Pinned (method C - shortcut in pinned folder).' }
+    }
+
+    if (-not $pinned) { Write-Host '   Task Manager pin FAILED (all methods).' -ForegroundColor Yellow }
 } catch { Warn $_ }
 finally {
     try { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($verbKey, $false) } catch {}
-    Remove-Item $lnk -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmpLnk -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
 Write-Host 'All tasks completed.'
 
 # ------------------------------------------------------------
-# Install menu
+# Install menu (skipped automatically inside GitHub Actions)
 # ------------------------------------------------------------
-Write-Host ''
-Write-Host '============================================'
-Write-Host ' Setup finished! What would you like to install?'
-Write-Host '============================================'
-Write-Host ''
-Write-Host '  [1] opencode Desktop + opencode Terminal'
-Write-Host '  [2] Ollama'
-Write-Host '  [3] Both (opencode + Ollama)'
-Write-Host '  [4] Nothing (Skip)'
-Write-Host ''
+if (-not $env:GITHUB_ACTIONS) {
 
-function Install-Winget([string]$id) {
-    winget install --id $id --exact --silent --accept-source-agreements --accept-package-agreements --disable-interactivity
+    Write-Host ''
+    Write-Host '============================================'
+    Write-Host ' Setup finished! What would you like to install?'
+    Write-Host '============================================'
+    Write-Host ''
+    Write-Host '  [1] opencode Desktop + opencode Terminal'
+    Write-Host '  [2] Ollama'
+    Write-Host '  [3] Both (opencode + Ollama)'
+    Write-Host '  [4] Nothing (Skip)'
+    Write-Host ''
+
+    function Install-Winget([string]$id) {
+        winget install --id $id --exact --silent --accept-source-agreements --accept-package-agreements --disable-interactivity
+    }
+
+    $choice = Read-Host 'Enter your choice (1-4)'
+    switch ($choice) {
+        '1' { Install-Winget 'SST.opencode'; Install-Winget 'SST.OpenCodeDesktop'; Write-Host 'opencode installation finished.' }
+        '2' { Install-Winget 'Ollama.Ollama'; Write-Host 'Ollama installation finished.' }
+        '3' { Install-Winget 'SST.opencode'; Install-Winget 'SST.OpenCodeDesktop'; Install-Winget 'Ollama.Ollama'; Write-Host 'All installations finished.' }
+        '4' { Write-Host 'Skipping installations.' }
+        default { Write-Host 'Invalid choice! No installations performed.' }
+    }
+
+    Write-Host ''
+    Write-Host '============================================'
+    Write-Host ' All done!'
+    Write-Host '============================================'
+    Read-Host 'Press Enter to exit'
 }
-
-$choice = Read-Host 'Enter your choice (1-4)'
-switch ($choice) {
-    '1' { Install-Winget 'SST.opencode'; Install-Winget 'SST.OpenCodeDesktop'; Write-Host 'opencode installation finished.' }
-    '2' { Install-Winget 'Ollama.Ollama'; Write-Host 'Ollama installation finished.' }
-    '3' { Install-Winget 'SST.opencode'; Install-Winget 'SST.OpenCodeDesktop'; Install-Winget 'Ollama.Ollama'; Write-Host 'All installations finished.' }
-    '4' { Write-Host 'Skipping installations.' }
-    default { Write-Host 'Invalid choice! No installations performed.' }
-}
-
-Write-Host ''
-Write-Host '============================================'
-Write-Host ' All done!'
-Write-Host '============================================'
-Read-Host 'Press Enter to exit'
