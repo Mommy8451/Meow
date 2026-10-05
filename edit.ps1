@@ -53,7 +53,7 @@ try {
 # ------------------------------------------------------------
 # [3/5] Unpin Microsoft Edge from taskbar
 # ------------------------------------------------------------
-Write-Host '[3/4] Unpinning Microsoft Edge from taskbar...'
+Write-Host '[3/5] Unpinning Microsoft Edge from taskbar...'
 try {
     $pinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
     $edge = @()
